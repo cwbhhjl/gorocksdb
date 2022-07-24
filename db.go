@@ -6,6 +6,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"unsafe"
 )
 
@@ -247,19 +248,35 @@ func (db *DB) Name() string {
 	return db.name
 }
 
+type cget struct {
+	valLen C.size_t
+	cErr   *C.char
+}
+
+var cpool = &sync.Pool{
+	New: func() interface{} {
+		return &cget{}
+	},
+}
+
 // Get returns the data associated with the key from the database.
 func (db *DB) Get(opts *ReadOptions, key []byte) (*Slice, error) {
 	var (
-		cErr    *C.char
-		cValLen C.size_t
-		cKey    = byteToChar(key)
+		// cErr *C.char
+		cKey = byteToChar(key)
 	)
-	cValue := C.rocksdb_get(db.c, opts.c, cKey, C.size_t(len(key)), &cValLen, &cErr)
-	if cErr != nil {
+	var d = cpool.Get().(*cget)
+	defer cpool.Put(d)
+	*d = cget{}
+	var cpValLen = &d.valLen
+	var cpErr = &d.cErr
+
+	cValue := C.rocksdb_get(db.c, opts.c, cKey, C.size_t(len(key)), cpValLen, cpErr)
+	if cErr := *cpErr; cErr != nil {
 		defer C.rocksdb_free(unsafe.Pointer(cErr))
 		return nil, errors.New(C.GoString(cErr))
 	}
-	return NewSlice(cValue, cValLen), nil
+	return NewSlice(cValue, *cpValLen), nil
 }
 
 // GetBytes is like Get but returns a copy of the data.
